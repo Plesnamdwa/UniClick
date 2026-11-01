@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog
 import customtkinter as ctk
 import time
+import queue
 from typing import Optional
 
 from engine import AutoClickerEngine
@@ -30,6 +31,10 @@ class UniClickApp(ctk.CTk):
         self.toast = ToastManager(self)
         self._pulse_on = False
         self._pulse_job = None
+        self._closing = False
+
+        # Thread-safe event queue for zero-lag decoupled GUI updates
+        self._event_queue = queue.Queue()
 
         # Core engine & data
         self.engine = AutoClickerEngine()
@@ -49,18 +54,18 @@ class UniClickApp(ctk.CTk):
         self._pre_mini_topmost = False
         self._saved_geometry = "1040x820"
 
-        # Wire engine callbacks
-        self.engine.on_status_change = self._safe_on_status_change
-        self.engine.on_step = self._safe_on_step
-        self.engine.on_cycle = self._safe_on_cycle
-        self.engine.on_tick = self._safe_on_tick
-        self.engine.on_log = self._safe_on_log
+        # Wire engine callbacks into thread-safe queue (zero Tcl lock contention)
+        self.engine.on_status_change = lambda st: self._event_queue.put(("status", st))
+        self.engine.on_step = lambda step, total, pt: self._event_queue.put(("step", (step, total, pt)))
+        self.engine.on_cycle = lambda cyc: self._event_queue.put(("cycle", cyc))
+        self.engine.on_tick = lambda rem, el: self._event_queue.put(("tick", (rem, el)))
+        self.engine.on_log = lambda msg: self._event_queue.put(("log", msg))
 
-        # Wire global hotkeys (F6, F7, F8/ESC)
+        # Wire global hotkeys into thread-safe queue
         self.hotkeys = GlobalHotkeyManager(
-            on_toggle_start=self._hotkey_toggle_start,
-            on_capture_point=self._hotkey_capture_point,
-            on_emergency_stop=self._hotkey_emergency_stop
+            on_toggle_start=lambda: self._event_queue.put(("hotkey_start", None)),
+            on_capture_point=lambda x, y: self._event_queue.put(("hotkey_capture", (x, y))),
+            on_emergency_stop=lambda: self._event_queue.put(("hotkey_stop", None)),
         )
         self.hotkeys.start()
 
@@ -82,6 +87,9 @@ class UniClickApp(ctk.CTk):
 
         # Start live cursor coordinate tracker loop
         self._update_cursor_tracker()
+
+        # Start thread-safe event queue consumer (dispatches on main UI thread)
+        self._drain_event_queue()
 
         # Clean exit handler
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -362,14 +370,14 @@ class UniClickApp(ctk.CTk):
         self.entry_default_delay.pack(side="right")
 
         row = self._setting_row(b)
-        self.var_use_jitter = ctk.BooleanVar(value=True)
+        self.var_use_jitter = ctk.BooleanVar(value=False)
         self.chk_jitter = self._switch(row, "Time jitter (± s)", self.var_use_jitter)
         self.chk_jitter.pack(side="left")
         self.entry_jitter = self._entry(row, "0.05")
         self.entry_jitter.pack(side="right")
 
         row = self._setting_row(b)
-        self.var_use_px_jitter = ctk.BooleanVar(value=True)
+        self.var_use_px_jitter = ctk.BooleanVar(value=False)
         self.chk_px_jitter = self._switch(row, "Click radius (± px)", self.var_use_px_jitter)
         self.chk_px_jitter.pack(side="left")
         self.entry_px_jitter = self._entry(row, "4")
@@ -1217,12 +1225,12 @@ class UniClickApp(ctk.CTk):
         self.entry_default_delay.insert(0, str(data.get("default_delay", 1.0)))
 
         jitter = data.get("random_jitter", 0.05)
-        self.var_use_jitter.set(data.get("use_jitter", jitter > 0))
+        self.var_use_jitter.set(bool(data.get("use_jitter", False)))
         self.entry_jitter.delete(0, "end")
         self.entry_jitter.insert(0, str(jitter if jitter > 0 else 0.05))
 
         px_jitter = data.get("pixel_jitter", 4)
-        self.var_use_px_jitter.set(data.get("use_pixel_jitter", px_jitter > 0))
+        self.var_use_px_jitter.set(bool(data.get("use_pixel_jitter", False)))
         self.entry_px_jitter.delete(0, "end")
         self.entry_px_jitter.insert(0, str(px_jitter))
 
@@ -1331,21 +1339,66 @@ class UniClickApp(ctk.CTk):
         self.pin_mgr.show_all()
 
     # -----------------------------
-    # Global Hotkey Handlers
+    # Thread-Safe Event Queue Consumer (Runs on Tkinter Main Thread)
     # -----------------------------
-    def _hotkey_toggle_start(self):
-        self.after(0, self._cmd_start if self.engine.status != "RUNNING" else self._cmd_pause)
+    def _drain_event_queue(self):
+        if getattr(self, "_closing", False):
+            return
 
-    def _hotkey_capture_point(self, x: int, y: int):
-        self.after(0, lambda: self._add_target_at(x, y))
+        try:
+            processed = 0
+            while not self._event_queue.empty() and processed < 40:
+                event_type, payload = self._event_queue.get_nowait()
+                processed += 1
+                if event_type == "status":
+                    self._update_status_ui(payload)
+                elif event_type == "step":
+                    step_idx, total, pt = payload
+                    self._on_step_ui(step_idx, total, pt)
+                elif event_type == "cycle":
+                    self.lbl_cycles.configure(
+                        text=f"🔄 Cycle: #{payload}   |   🎯 Step: 1/{len(self.engine.points)}   |   ⚡ Clicks: {self.engine.total_clicks}"
+                    )
+                elif event_type == "tick":
+                    rem, el = payload
+                    self._update_tick_ui(rem, el)
+                elif event_type == "log":
+                    self._append_log(payload)
+                elif event_type == "hotkey_start":
+                    if self.engine.status != "RUNNING":
+                        self._cmd_start()
+                    else:
+                        self._cmd_pause()
+                elif event_type == "hotkey_capture":
+                    x, y = payload
+                    self._add_target_at(x, y)
+                elif event_type == "hotkey_stop":
+                    self._cmd_stop()
+        except Exception:
+            pass
 
-    def _hotkey_emergency_stop(self):
-        self.after(0, self._cmd_stop)
+        self.after(20, self._drain_event_queue)
 
-    # -----------------------------
-    # Thread-Safe GUI Updates
-    # -----------------------------
+    def _on_step_ui(self, step_index: int, total_steps: int, pt: dict):
+        now = time.time()
+        if not hasattr(self, "_last_step_ui_time") or (now - self._last_step_ui_time >= 0.05) or (step_index != getattr(self, "_last_step_idx", -1)):
+            self._last_step_ui_time = now
+            self._last_step_idx = step_index
+            self.lbl_cycles.configure(
+                text=f"🔄 Cycle: #{self.engine.current_cycle}   |   "
+                     f"🎯 Step: {step_index}/{total_steps} ({pt.get('label', '')})   |   "
+                     f"⚡ Clicks: {self.engine.total_clicks}"
+            )
+        self._highlight_active_row(step_index - 1)
+        if not self.engine.use_duration and self.engine.use_max_cycles and self.engine.max_cycles > 0:
+            prog = ((self.engine.current_cycle - 1) + (step_index / max(1, total_steps))) / self.engine.max_cycles
+            self.progress_bar.set(min(1.0, max(0.0, prog)))
+
     def _highlight_active_row(self, active_zero_idx: Optional[int]):
+        if getattr(self, "_current_highlight_idx", -999) == active_zero_idx:
+            return  # No-op: row is already highlighted, avoid redrawing to prevent UI jitter/flicker!
+        self._current_highlight_idx = active_zero_idx
+
         for idx, row in enumerate(self.point_widgets):
             if not row.winfo_exists():
                 continue
@@ -1353,9 +1406,6 @@ class UniClickApp(ctk.CTk):
                 row.configure(border_width=2, border_color=T.SUCCESS)
             else:
                 row.configure(border_width=1, border_color=T.BORDER)
-
-    def _safe_on_status_change(self, status: str):
-        self.after(0, lambda: self._update_status_ui(status))
 
     def _update_status_ui(self, status: str):
         bg, fg, label = T.STATUS.get(status, T.STATUS["IDLE"])
@@ -1422,28 +1472,6 @@ class UniClickApp(ctk.CTk):
             return
         self._pulse_job = self.after(520, self._pulse_tick)
 
-    def _safe_on_step(self, step_index: int, total_steps: int, pt: dict):
-        def _upd():
-            self.lbl_cycles.configure(
-                text=f"🔄 Cycle: #{self.engine.current_cycle}   |   "
-                     f"🎯 Step: {step_index}/{total_steps} ({pt.get('label', '')})   |   "
-                     f"⚡ Clicks: {self.engine.total_clicks}"
-            )
-            self._highlight_active_row(step_index - 1)
-            self.pin_mgr.flash_click(pt.get("x", 0), pt.get("y", 0), step_index - 1)
-            if not self.engine.use_duration and self.engine.use_max_cycles and self.engine.max_cycles > 0:
-                prog = ((self.engine.current_cycle - 1) + (step_index / max(1, total_steps))) / self.engine.max_cycles
-                self.progress_bar.set(min(1.0, max(0.0, prog)))
-        self.after(0, _upd)
-
-    def _safe_on_cycle(self, cycle: int):
-        self.after(0, lambda: self.lbl_cycles.configure(
-            text=f"🔄 Cycle: #{cycle}   |   🎯 Step: 1/{len(self.engine.points)}   |   ⚡ Clicks: {self.engine.total_clicks}"
-        ))
-
-    def _safe_on_tick(self, remaining: float, elapsed: float):
-        self.after(0, lambda: self._update_tick_ui(remaining, elapsed))
-
     def _update_tick_ui(self, remaining: float, elapsed: float):
         if self.engine.use_duration and self.engine.duration_seconds > 0:
             rem_m, rem_s = divmod(int(remaining), 60)
@@ -1457,9 +1485,6 @@ class UniClickApp(ctk.CTk):
             self.lbl_countdown.configure(
                 text=f"⏳ Elapsed: {el_m:02d}:{el_s:02d} ({elapsed:.1f}s)"
             )
-
-    def _safe_on_log(self, message: str):
-        self.after(0, lambda: self._append_log(message))
 
     @staticmethod
     def _classify_log(message: str) -> str:
@@ -1483,9 +1508,16 @@ class UniClickApp(ctk.CTk):
         kind = self._classify_log(message)
         self.txt_log.insert("end", f"{timestamp}  ", "time")
         self.txt_log.insert("end", f"{message}\n", kind)
+        try:
+            line_count = int(float(self.txt_log.index("end-1c").split(".")[0]))
+            if line_count > 300:
+                self.txt_log.delete("1.0", "60.0")
+        except Exception:
+            pass
         self.txt_log.see("end")
 
     def _on_close(self):
+        self._closing = True
         try:
             if self._snipe_overlay:
                 self._snipe_overlay.stop()

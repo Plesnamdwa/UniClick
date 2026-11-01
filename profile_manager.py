@@ -15,9 +15,9 @@ class ProfileManager:
         return {
             "name": "Default Profile",
             "default_delay": 1.0,          # seconds (decimal)
-            "use_jitter": True,            # enable time jitter
+            "use_jitter": False,           # enable time jitter (default off for pure accuracy)
             "random_jitter": 0.05,         # +/- random jitter seconds
-            "use_pixel_jitter": True,      # enable anti-cheat coordinate jitter
+            "use_pixel_jitter": False,     # enable anti-cheat coordinate jitter (default off)
             "pixel_jitter": 4,             # +/- random pixel offset radius
             "restore_cursor": False,       # Ghost Click: return cursor after clicking
             "use_duration": False,         # duration timer toggle

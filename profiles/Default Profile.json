@@ -1,9 +1,9 @@
 {
     "name": "Default Profile",
     "default_delay": 1.0,
-    "use_jitter": true,
+    "use_jitter": false,
     "random_jitter": 0.05,
-    "use_pixel_jitter": true,
+    "use_pixel_jitter": false,
     "pixel_jitter": 4,
     "restore_cursor": false,
     "use_duration": false,
