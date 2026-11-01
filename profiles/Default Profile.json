@@ -1,0 +1,42 @@
+{
+    "name": "Default Profile",
+    "default_delay": 1.0,
+    "use_jitter": true,
+    "random_jitter": 0.05,
+    "use_pixel_jitter": true,
+    "pixel_jitter": 4,
+    "restore_cursor": false,
+    "use_duration": false,
+    "duration_seconds": 60.0,
+    "use_max_cycles": false,
+    "max_cycles": 10,
+    "points": [
+        {
+            "label": "Target Button #1",
+            "x": 650,
+            "y": 450,
+            "delay": 2.5,
+            "click_type": "left",
+            "repeat": 1,
+            "enabled": true
+        },
+        {
+            "label": "Target Button #2",
+            "x": 950,
+            "y": 250,
+            "delay": 1.0,
+            "click_type": "left",
+            "repeat": 1,
+            "enabled": true
+        },
+        {
+            "label": "Confirm / Next",
+            "x": 800,
+            "y": 600,
+            "delay": 1.5,
+            "click_type": "left",
+            "repeat": 1,
+            "enabled": true
+        }
+    ]
+}

@@ -1,0 +1,28 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller / Build outputs (Jangan upload binary/build ke git)
+build/
+dist/
+*.spec
+
+# User created profiles (Kecuali profile bawaan Default Profile.json)
+profiles/*
+!profiles/Default Profile.json
+
+# Environment / IDE files
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+*.swp
+*.bak
+
+# Temporary / OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/

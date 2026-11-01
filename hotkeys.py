@@ -1,0 +1,165 @@
+import ctypes
+from ctypes import wintypes
+import threading
+import time
+import winsound
+from typing import Callable, Optional
+
+# Enable Per-Monitor DPI awareness V2
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    except Exception:
+        pass
+
+class POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork", wintypes.RECT),
+        ("dwFlags", wintypes.DWORD),
+    ]
+
+def get_current_mouse_pos() -> tuple[int, int]:
+    """Gets current physical screen cursor coordinates (X, Y) across all monitors."""
+    pt = POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+    return int(pt.x), int(pt.y)
+
+def get_monitor_bounds_at(x: int, y: int) -> tuple[int, int, int, int]:
+    """Returns (left, top, right, bottom) of the monitor nearest to (x, y)."""
+    try:
+        user32 = ctypes.windll.user32
+        pt = wintypes.POINT(int(x), int(y))
+        hmon = user32.MonitorFromPoint(pt, 2)  # MONITOR_DEFAULTTONEAREST = 2
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            r = mi.rcWork
+            return int(r.left), int(r.top), int(r.right), int(r.bottom)
+    except Exception:
+        pass
+    return 0, 0, 1920, 1080
+
+# Sound cue sequences: list of (frequency_hz, duration_ms)
+SOUND_CUES: dict[str, list[tuple[int, int]]] = {
+    "add": [(784, 35), (1175, 45)],
+    "snipe": [(988, 30), (1319, 50)],
+    "start": [(659, 40), (880, 60)],
+    "pause": [(659, 40), (523, 55)],
+    "stop": [(523, 45), (392, 65)],
+    "complete": [(784, 50), (988, 50), (1319, 95)],
+    "delete": [(440, 40)],
+    "gather": [(659, 35), (784, 45)],
+    "cancel": [(494, 40), (392, 50)],
+}
+
+def play_tone(freq: int = 880, duration_ms: int = 60):
+    """Plays a non-blocking crisp audio tone in a background daemon thread."""
+    def _beep():
+        try:
+            winsound.Beep(freq, duration_ms)
+        except Exception:
+            try:
+                winsound.MessageBeep(winsound.MB_OK)
+            except Exception:
+                pass
+    threading.Thread(target=_beep, daemon=True).start()
+
+def play_sound(cue: str = "add"):
+    """Plays a pleasant, non-blocking multi-note sound cue by name."""
+    notes = SOUND_CUES.get(cue, [(880, 50)])
+
+    def _run():
+        try:
+            for freq, dur in notes:
+                winsound.Beep(freq, dur)
+        except Exception:
+            try:
+                winsound.MessageBeep(winsound.MB_OK)
+            except Exception:
+                pass
+
+    threading.Thread(target=_run, daemon=True).start()
+
+# Win32 Virtual Key Codes
+VK_LBUTTON = 0x01
+VK_RBUTTON = 0x02
+VK_ESCAPE = 0x1B
+VK_F6 = 0x75
+VK_F7 = 0x76
+VK_F8 = 0x77
+
+class GlobalHotkeyManager:
+    """High-reliability Global Hotkey Manager using Win32 GetAsyncKeyState with edge detection."""
+
+    def __init__(
+        self,
+        on_toggle_start: Optional[Callable[[], None]] = None,
+        on_capture_point: Optional[Callable[[int, int], None]] = None,
+        on_emergency_stop: Optional[Callable[[], None]] = None,
+    ):
+        self.on_toggle_start = on_toggle_start
+        self.on_capture_point = on_capture_point
+        self.on_emergency_stop = on_emergency_stop
+
+        self._user32 = ctypes.windll.user32
+        self._running = False
+        self._poll_thread: Optional[threading.Thread] = None
+
+    def start(self):
+        """Starts the background Win32 hotkey polling thread."""
+        if self._running:
+            return
+
+        self._running = True
+        self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._poll_thread.start()
+
+    def _poll_loop(self):
+        """Polls key state every ~18ms with rising-edge trigger."""
+        prev_f6 = False
+        prev_f7 = False
+        prev_f8 = False
+        prev_esc = False
+
+        while self._running:
+            try:
+                down_f6 = bool(self._user32.GetAsyncKeyState(VK_F6) & 0x8000)
+                down_f7 = bool(self._user32.GetAsyncKeyState(VK_F7) & 0x8000)
+                down_f8 = bool(self._user32.GetAsyncKeyState(VK_F8) & 0x8000)
+                down_esc = bool(self._user32.GetAsyncKeyState(VK_ESCAPE) & 0x8000)
+
+                if down_f6 and not prev_f6:
+                    if self.on_toggle_start:
+                        self.on_toggle_start()
+
+                if down_f7 and not prev_f7:
+                    x, y = get_current_mouse_pos()
+                    if self.on_capture_point:
+                        self.on_capture_point(x, y)
+
+                if (down_f8 and not prev_f8) or (down_esc and not prev_esc):
+                    if self.on_emergency_stop:
+                        self.on_emergency_stop()
+
+                prev_f6 = down_f6
+                prev_f7 = down_f7
+                prev_f8 = down_f8
+                prev_esc = down_esc
+
+            except Exception:
+                pass
+
+            time.sleep(0.018)
+
+    def stop(self):
+        """Stops the hotkey thread."""
+        self._running = False
+        if self._poll_thread and self._poll_thread.is_alive():
+            self._poll_thread.join(timeout=0.5)
