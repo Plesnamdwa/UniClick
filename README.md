@@ -11,7 +11,7 @@
     <img src="https://img.shields.io/badge/Language-Python%203.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+" />
     <img src="https://img.shields.io/badge/GUI-CustomTkinter-blueviolet?style=for-the-badge" alt="CustomTkinter" />
     <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License MIT" />
-    <img src="https://img.shields.io/badge/Status-Stable%20v1.0.0-success?style=for-the-badge" alt="Version 1.0.0" />
+    <img src="https://img.shields.io/badge/Status-Stable%20v1.1.0-success?style=for-the-badge" alt="Version 1.1.0" />
   </p>
 
   <p align="center">
