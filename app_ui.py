@@ -3,6 +3,7 @@ from tkinter import messagebox, simpledialog
 import customtkinter as ctk
 import time
 import queue
+import threading
 from typing import Optional
 
 from engine import AutoClickerEngine
