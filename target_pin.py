@@ -235,6 +235,7 @@ class TargetPin:
                 pady=4,
                 relief="flat",
                 bd=0,
+                justify="center",
             )
             self.hud_lbl.pack(padx=1, pady=1)
 
@@ -247,19 +248,21 @@ class TargetPin:
     def _update_hud_text_and_pos(self):
         if self.hud_win and self.hud_lbl and self.hud_win.winfo_exists():
             state_str = "" if self.enabled else " [DISABLED]"
-            col_tag = f"  ·  🎨 {self.target_color} ({self.color_mode.upper()} {self.color_tolerance:.0f}%)" if getattr(self, "color_trigger", False) else ""
-            txt = (
-                f"#{self.index + 1} {self.label}{state_str}   ·   "
-                f"X {self.center_x}, Y {self.center_y}   ·   "
-                f"⏱ {self.delay:.2f}s{col_tag}  (Scroll ±0.1s · Right-click delete)"
-            )
+            col_tag = f"   ·   🎨 {self.target_color} ({self.color_mode.upper()} {self.color_tolerance:.0f}%)" if getattr(self, "color_trigger", False) else ""
+            line1 = f"#{self.index + 1} {self.label}{state_str}   ·   X {self.center_x}, Y {self.center_y}   ·   ⏱ {self.delay:.2f}s{col_tag}"
+            line2 = "Scroll ±0.1s   ·   Right-click: Delete Pin"
+            txt = f"{line1}\n{line2}"
+
             if getattr(self, "_last_hud_text", None) != txt:
                 self._last_hud_text = txt
                 outer_col, _, _ = self._get_accent_colors()
                 self.hud_win.config(bg=outer_col)
                 self.hud_lbl.config(text=txt)
-            hud_x = self.center_x - 135
-            hud_y = self.top_left_y - 34
+                self.hud_win.update_idletasks()
+
+            req_w = self.hud_win.winfo_reqwidth()
+            hud_x = self.center_x - (req_w // 2)
+            hud_y = self.top_left_y - 48
             self.hud_win.geometry(f"+{hud_x}+{hud_y}")
 
     def _hide_hud(self):
