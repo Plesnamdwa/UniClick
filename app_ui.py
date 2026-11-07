@@ -963,9 +963,8 @@ class UniClickApp(ctk.CTk):
 
         # Inline Color Trigger Expansion Drawer
         is_color_active = bool(pt.get("color_trigger", False))
-        is_expanded = is_color_active or (index in self._expanded_color_rows)
 
-        if is_expanded:
+        if is_color_active:
             color_drawer = ctk.CTkFrame(
                 row,
                 corner_radius=T.RADIUS_SM,
@@ -975,7 +974,7 @@ class UniClickApp(ctk.CTk):
             )
             color_drawer.grid(row=2, column=0, columnspan=3, padx=8, pady=(4, 8), sticky="ew")
 
-            # --- Row 1: Mode Selection & Active Toggle ---
+            # --- Row 1: Mode Selection & Exit Button ---
             r1 = ctk.CTkFrame(color_drawer, fg_color="transparent")
             r1.pack(fill="x", padx=10, pady=(8, 4))
 
@@ -1010,42 +1009,19 @@ class UniClickApp(ctk.CTk):
             seg_mode.set(mode_map.get(cur_mode, "Queue (Wait)"))
             seg_mode.pack(side="left")
 
-            # Toggle Switch & Collapse button on the right
-            sw_active_var = ctk.BooleanVar(value=is_color_active)
-            def _on_toggle_active():
-                active = sw_active_var.get()
-                pt["color_trigger"] = active
-                if not active and index in self._expanded_color_rows:
-                    self._expanded_color_rows.remove(index)
-                self.pin_mgr.sync_points(self.engine.points)
-                self._render_points_list()
-
-            sw_active = ctk.CTkSwitch(
+            # Exit Color Mode button on the right
+            btn_exit = ctk.CTkButton(
                 r1,
-                text="Active",
-                variable=sw_active_var,
-                width=34,
-                switch_width=28,
-                switch_height=14,
-                progress_color=T.SUCCESS,
-                font=ctk.CTkFont(family=T.FONT_FAMILY, size=11, weight="bold"),
-                command=_on_toggle_active,
-            )
-            sw_active.pack(side="right", padx=(6, 0))
-
-            btn_close = ctk.CTkButton(
-                r1,
-                text="▲",
-                width=24,
-                height=22,
+                text="✕ Exit to Normal Mode",
+                height=24,
                 corner_radius=T.RADIUS_SM,
-                fg_color="transparent",
-                hover_color=T.NEUTRAL_HOVER,
-                text_color=T.TEXT_DIM,
-                font=ctk.CTkFont(size=10),
+                fg_color=T.DANGER_SUBTLE,
+                hover_color=T.DANGER_SUBTLE_HOVER,
+                text_color=T.DANGER,
+                font=ctk.CTkFont(family=T.FONT_FAMILY, size=10, weight="bold"),
                 command=lambda i=index: self._cmd_toggle_color_expand(i),
             )
-            btn_close.pack(side="right")
+            btn_exit.pack(side="right")
 
             # --- Row 2: Target Color (Swatch, Hex, Under Pin, Pipet, Presets) ---
             r2 = ctk.CTkFrame(color_drawer, fg_color="transparent")
@@ -1422,15 +1398,17 @@ class UniClickApp(ctk.CTk):
         is_active = bool(pt.get("color_trigger", False))
 
         if not is_active:
+            # Turn ON color trigger mode and expand settings drawer
             pt["color_trigger"] = True
-            self._expanded_color_rows.add(index)
             self.pin_mgr.sync_points(self.engine.points)
             self.toast.show(f"Color trigger enabled for Target #{index + 1}", "success", 1200)
+            self._append_log(f"Target #{index + 1} switched to Color Trigger Mode.")
         else:
-            if index in self._expanded_color_rows:
-                self._expanded_color_rows.remove(index)
-            else:
-                self._expanded_color_rows.add(index)
+            # Turn OFF color trigger mode, collapse card, and return to normal mode
+            pt["color_trigger"] = False
+            self.pin_mgr.sync_points(self.engine.points)
+            self.toast.show(f"Target #{index + 1} returned to normal mode", "info", 1200)
+            self._append_log(f"Target #{index + 1} returned to Normal Click Mode.")
 
         self._render_points_list()
 
