@@ -1071,10 +1071,22 @@ class UniClickApp(ctk.CTk):
             def _sample_under_pin():
                 px_x = int(pt.get("x", 0))
                 px_y = int(pt.get("y", 0))
-                rgb = get_pixel_color(px_x, px_y)
-                new_h = rgb_to_hex(rgb)
-                _apply_new_color(new_h)
-                play_sound("snipe")
+
+                # Momentarily hide on-screen pins so sampling reads the true screen pixel underneath
+                self.pin_mgr.hide_all()
+                self.update_idletasks()
+
+                def _do_sample():
+                    try:
+                        rgb = get_pixel_color(px_x, px_y)
+                        new_h = rgb_to_hex(rgb)
+                        _apply_new_color(new_h)
+                        play_sound("snipe")
+                        self.toast.show(f"Sampled {new_h} at ({px_x}, {px_y})", "success", 1200)
+                    finally:
+                        self.pin_mgr.show_all()
+
+                self.after(50, _do_sample)
 
             btn_under_pin = ctk.CTkButton(
                 r2,
@@ -1092,10 +1104,17 @@ class UniClickApp(ctk.CTk):
             btn_under_pin.pack(side="left", padx=(0, 5))
 
             def _start_pipet():
+                # Temporarily hide pins so eyedropper never samples on top of pin bodies
+                self.pin_mgr.hide_all()
+
                 def _on_picked(picked_hex: str, coords: tuple):
                     _apply_new_color(picked_hex)
+                    self.pin_mgr.show_all()
 
-                ColorEyedropperOverlay(self, on_picked=_on_picked)
+                def _on_cancel():
+                    self.pin_mgr.show_all()
+
+                ColorEyedropperOverlay(self, on_picked=_on_picked, on_cancelled=_on_cancel)
 
             btn_pipet = ctk.CTkButton(
                 r2,

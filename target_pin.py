@@ -190,14 +190,21 @@ class TargetPin:
             fill=T.PIN_CORE, outline=inner_col, width=2
         )
 
+        # Center precision optical aperture (transparent hole so pixels behind are 100% visible)
+        hole_r = max(2, round(4 * s))
+        self.canvas.create_oval(
+            cx - hole_r, cy - hole_r, cx + hole_r, cy + hole_r,
+            fill=T.TRANSPARENT_KEY, outline=inner_col, width=1
+        )
+
         if s >= 0.7:
-            # Sequence Number (#1, #2, ...)
+            # Sequence Number (#1, #2, ...) positioned above center aperture
             num_str = f"#{self.index + 1}"
             self.canvas.create_text(
-                cx, cy - 3,
+                cx, cy - 8,
                 text=num_str,
                 fill=T.PIN_TEXT if self.enabled else T.PIN_TEXT_DISABLED,
-                font=(T.FONT_FAMILY, 10, "bold"),
+                font=(T.FONT_FAMILY, 8, "bold"),
             )
 
             # Small delay sub-label inside circle bottom
