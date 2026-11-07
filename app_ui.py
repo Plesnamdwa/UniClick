@@ -86,6 +86,9 @@ class UniClickApp(ctk.CTk):
         self._load_initial_profile()
         self._ui_ready = True
 
+        # Wire reactive section summaries triggers (strictly event-driven, zero polling)
+        self._setup_reactive_summaries()
+
         # Start live cursor coordinate tracker loop
         self._update_cursor_tracker()
 
@@ -518,6 +521,29 @@ class UniClickApp(ctk.CTk):
         if m:
             return f"{m}m {sec:02d}s" if sec else f"{m}m"
         return f"{sec}s"
+
+    def _setup_reactive_summaries(self):
+        """Attaches reactive traces and key listeners so section summaries update strictly on user input."""
+        for var in (
+            self.var_use_jitter,
+            self.var_use_px_jitter,
+            self.var_restore_cursor,
+            self.var_use_duration,
+            self.var_use_cycles,
+        ):
+            try:
+                var.trace_add("write", lambda *args: self._refresh_section_summaries())
+            except Exception:
+                pass
+
+        for entry in (self.entry_default_delay, self.entry_duration, self.entry_max_cycles):
+            try:
+                entry.bind("<KeyRelease>", lambda e: self._refresh_section_summaries(), add="+")
+                entry.bind("<FocusOut>", lambda e: self._refresh_section_summaries(), add="+")
+            except Exception:
+                pass
+
+        self._refresh_section_summaries()
 
     def _refresh_section_summaries(self):
         """Keep each collapsed header informative. set_summary only redraws on change."""
@@ -1141,12 +1167,6 @@ class UniClickApp(ctk.CTk):
                 self.lbl_live_cursor.configure(text=f"📍 X: {x}, Y: {y}")
         except Exception:
             pass
-        self._summary_tick_count = getattr(self, "_summary_tick_count", 0) + 1
-        if self._summary_tick_count % 3 == 0:
-            try:
-                self._refresh_section_summaries()
-            except Exception:
-                pass
         self.after(100, self._update_cursor_tracker)
 
     # -----------------------------
@@ -1353,6 +1373,7 @@ class UniClickApp(ctk.CTk):
 
         try:
             processed = 0
+            pending_logs = []
             while not self._event_queue.empty() and processed < 100:
                 event_type, payload = self._event_queue.get_nowait()
                 processed += 1
@@ -1369,7 +1390,7 @@ class UniClickApp(ctk.CTk):
                     rem, el = payload
                     self._update_tick_ui(rem, el)
                 elif event_type == "log":
-                    self._append_log(payload)
+                    pending_logs.append(payload)
                 elif event_type == "hotkey_start":
                     if self.engine.status != "RUNNING":
                         self._cmd_start()
@@ -1380,6 +1401,9 @@ class UniClickApp(ctk.CTk):
                     self._add_target_at(x, y)
                 elif event_type == "hotkey_stop":
                     self._cmd_stop()
+
+            if pending_logs:
+                self._append_log_batch(pending_logs)
         except Exception:
             pass
 
@@ -1514,23 +1538,30 @@ class UniClickApp(ctk.CTk):
             return "success"
         return "info"
 
-    def _append_log(self, message: str):
+    def _append_log_batch(self, messages: list[str]):
+        """Batches multiple log lines into a single text-insertion cycle to avoid GUI stutter."""
+        if not messages:
+            return
         timestamp = time.strftime("%H:%M:%S")
-        kind = self._classify_log(message)
-        self.txt_log.insert("end", f"{timestamp}  ", "time")
-        self.txt_log.insert("end", f"{message}\n", kind)
+        for message in messages:
+            kind = self._classify_log(message)
+            self.txt_log.insert("end", f"{timestamp}  ", "time")
+            self.txt_log.insert("end", f"{message}\n", kind)
         try:
             line_count = int(float(self.txt_log.index("end-1c").split(".")[0]))
             if line_count > 300:
-                self.txt_log.delete("1.0", "60.0")
+                self.txt_log.delete("1.0", f"{line_count - 250}.0")
         except Exception:
             pass
 
-        # Throttle see("end") to at most once per 100ms to avoid constant layout reflow during click bursts
+        # Throttle see("end") to at most once per 120ms
         now = time.perf_counter()
-        if now - getattr(self, "_last_log_see_time", 0.0) >= 0.10:
+        if now - getattr(self, "_last_log_see_time", 0.0) >= 0.12:
             self._last_log_see_time = now
             self.txt_log.see("end")
+
+    def _append_log(self, message: str):
+        self._append_log_batch([message])
 
     def _on_close(self):
         self._closing = True

@@ -27,3 +27,16 @@ def disable_high_precision_timer():
             _timer_active = False
         except Exception:
             pass
+
+def ensure_dpi_awareness_v2():
+    """Sets Per-Monitor DPI Awareness V2 for true multi-monitor coordinate alignment."""
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass

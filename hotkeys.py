@@ -2,17 +2,12 @@ import ctypes
 from ctypes import wintypes
 import threading
 import time
+import queue
 import winsound
 from typing import Callable, Optional
+from win_timer import ensure_dpi_awareness_v2
 
-# Enable Per-Monitor DPI awareness V2
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)
-except Exception:
-    try:
-        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
-    except Exception:
-        pass
+ensure_dpi_awareness_v2()
 
 class POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
@@ -59,33 +54,45 @@ SOUND_CUES: dict[str, list[tuple[int, int]]] = {
     "cancel": [(494, 40), (392, 50)],
 }
 
-def play_tone(freq: int = 880, duration_ms: int = 60):
-    """Plays a non-blocking crisp audio tone in a background daemon thread."""
-    def _beep():
+_audio_queue: queue.Queue = queue.Queue(maxsize=16)
+
+def _audio_worker():
+    """Single persistent daemon worker thread to prevent thread churn and Beep collisions."""
+    while True:
         try:
-            winsound.Beep(freq, duration_ms)
+            notes = _audio_queue.get()
+            if notes is None:
+                break
+            for freq, dur in notes:
+                try:
+                    winsound.Beep(freq, dur)
+                except Exception:
+                    try:
+                        winsound.MessageBeep(winsound.MB_OK)
+                    except Exception:
+                        pass
         except Exception:
-            try:
-                winsound.MessageBeep(winsound.MB_OK)
-            except Exception:
-                pass
-    threading.Thread(target=_beep, daemon=True).start()
+            pass
+        finally:
+            _audio_queue.task_done()
+
+_audio_thread = threading.Thread(target=_audio_worker, daemon=True)
+_audio_thread.start()
+
+def play_tone(freq: int = 880, duration_ms: int = 60):
+    """Plays a non-blocking crisp audio tone via persistent audio worker queue."""
+    try:
+        _audio_queue.put_nowait([(freq, duration_ms)])
+    except queue.Full:
+        pass
 
 def play_sound(cue: str = "add"):
     """Plays a pleasant, non-blocking multi-note sound cue by name."""
     notes = SOUND_CUES.get(cue, [(880, 50)])
-
-    def _run():
-        try:
-            for freq, dur in notes:
-                winsound.Beep(freq, dur)
-        except Exception:
-            try:
-                winsound.MessageBeep(winsound.MB_OK)
-            except Exception:
-                pass
-
-    threading.Thread(target=_run, daemon=True).start()
+    try:
+        _audio_queue.put_nowait(notes)
+    except queue.Full:
+        pass
 
 # Win32 Virtual Key Codes
 VK_LBUTTON = 0x01

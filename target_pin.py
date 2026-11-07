@@ -414,11 +414,13 @@ class SnipeCursorOverlay:
             return
 
         x, y = get_current_mouse_pos()
-        # Position floating badge slightly offset from cursor so cursor never clicks the badge itself
-        self.win.geometry(f"+{x + 22}+{y + 22}")
-        self.lbl.config(
-            text=f"🎯 SNIPE TARGET   (X {x} · Y {y})\nLeft-click: Place Pin   ·   Right-click / Esc: Cancel"
-        )
+        if getattr(self, "_last_snipe_pos", None) != (x, y):
+            self._last_snipe_pos = (x, y)
+            # Position floating badge slightly offset from cursor so cursor never clicks the badge itself
+            self.win.geometry(f"+{x + 22}+{y + 22}")
+            self.lbl.config(
+                text=f"🎯 SNIPE TARGET   (X {x} · Y {y})\nLeft-click: Place Pin   ·   Right-click / Esc: Cancel"
+            )
 
         l_down = bool(self._user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000)
         r_down = bool(self._user32.GetAsyncKeyState(VK_RBUTTON) & 0x8000)
