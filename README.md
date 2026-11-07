@@ -11,7 +11,7 @@
     <img src="https://img.shields.io/badge/Language-Python%203.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+" />
     <img src="https://img.shields.io/badge/GUI-CustomTkinter-blueviolet?style=for-the-badge" alt="CustomTkinter" />
     <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License MIT" />
-    <img src="https://img.shields.io/badge/Status-Stable%20v1.1.0-success?style=for-the-badge" alt="Version 1.1.0" />
+    <img src="https://img.shields.io/badge/Status-Stable%20v1.2.0-success?style=for-the-badge" alt="Version 1.2.0" />
   </p>
 
   <p align="center">
@@ -75,6 +75,26 @@ Whether you need rapid multi-button routines, precise timed sequences, or unobtr
       </ul>
     </td>
   </tr>
+  <tr>
+    <td width="50%">
+      <h3 align="left">🎨 Color-Triggered Pixel Detection</h3>
+      <ul>
+        <li><b>Sub-Microsecond GDI Sampling</b>: Ultra-fast native Win32 <code>GetDC</code>/<code>GetPixel</code> (~1.5µs) with zero external dependencies.</li>
+        <li><b>Dual Trigger Modes</b>: <i>Queue Mode</i> (waits in sequence indefinitely until color appears) & <i>Instant Sentinel Mode</i> (autonomous background watcher).</li>
+        <li><b>Inline Expandable Drawer</b>: Click <code>🎨</code> to configure trigger mode, color, and tolerance directly within sequence cards.</li>
+        <li><b>3D Euclidean Color Tolerance</b>: Configurable tolerance slider (<code>0% - 50%</code>, default 30%) with live match indicator.</li>
+      </ul>
+    </td>
+    <td width="50%">
+      <h3 align="left">🔍 Precise Color Acquisition</h3>
+      <ul>
+        <li><b>Cross-Screen Eyedropper Pipet</b>: Floating magnifier overlay tracks cursor across all monitors to sample exact colors.</li>
+        <li><b>🎯 Under Pin Sampling</b>: Instantly detects screen color beneath pin coordinates with automatic unobstructed window unmasking.</li>
+        <li><b>Optical Reticle Aperture</b>: Pin reticle features a transparent central peep-hole and color indicator pip.</li>
+        <li><b>Quick Palette Presets</b>: Instant 1-click selection from 8 base colors (Red, Yellow, Green, Blue, Orange, Purple, White, Black).</li>
+      </ul>
+    </td>
+  </tr>
 </table>
 
 ---
@@ -95,15 +115,15 @@ Whether you need rapid multi-button routines, precise timed sequences, or unobtr
 
 ### Option 1: Standalone Portable Executable (Recommended)
 No installation or Python runtime required:
-1. Download **`UniClick.exe`** from the [Latest GitHub Release](https://github.com).
+1. Download **`UniClick.exe`** from the [Latest GitHub Release](https://github.com/Plesnamdwa/UniClick/releases).
 2. Double-click to launch.
 
 ### Option 2: Run from Source
 
 ```bash
 # 1. Clone this repository
-git clone https://github.com/<your-username>/uniclick.git
-cd uniclick
+git clone https://github.com/Plesnamdwa/UniClick.git
+cd UniClick
 
 # 2. Install dependencies
 pip install -r requirements.txt
@@ -124,13 +144,15 @@ uniclick/
 ├── profiles/
 │   └── Default Profile.json     # Default profile preset template
 ├── tests/
-│   └── test_engine.py           # Unit tests (duration, cycles, profiles)
-├── app_ui.py                    # Modern CustomTkinter application GUI
-├── engine.py                    # Multi-target sequence clicker core engine
+│   ├── test_engine.py           # Unit tests (duration, cycles, profiles)
+│   └── test_color_trigger.py    # Unit tests for pixel distance, queue & sentinel modes
+├── app_ui.py                    # Modern CustomTkinter application GUI with inline drawer
+├── engine.py                    # Multi-target sequence clicker core engine & sentinel watcher
 ├── hotkeys.py                   # Win32 GetAsyncKeyState hotkey manager & audio cues
 ├── main.py                      # Per-Monitor DPI V2 bootstrap entry point
+├── pixel_scanner.py             # Sub-microsecond Win32 GDI pixel sampling & 3D color matching
 ├── profile_manager.py           # JSON profile schema serializer & migration
-├── target_pin.py                # Circular transparent reticle pins & Snipe mode
+├── target_pin.py                # Circular transparent reticle pins & Eyedropper overlay
 ├── theme.py                     # Unified design token system (T.*)
 ├── toast.py                     # Non-blocking slide-up toast notification system
 ├── ui_widgets.py                # Collapsible accordion container widgets
