@@ -1,8 +1,9 @@
 import tkinter as tk
-from typing import Callable, Optional, List
+from typing import Callable, Optional, List, Tuple
 import ctypes
 from hotkeys import get_current_mouse_pos, VK_LBUTTON, VK_RBUTTON, VK_ESCAPE, play_sound
 from theme import T
+from pixel_scanner import get_pixel_color, rgb_to_hex
 
 # Win32 extended window styles for click-through ripple overlay
 GWL_EXSTYLE = -20
@@ -33,6 +34,10 @@ class TargetPin:
         on_wheel_delay: Optional[Callable[[int, float], None]] = None,
         on_delete: Optional[Callable[[int], None]] = None,
         animate_spawn: bool = True,
+        color_trigger: bool = False,
+        target_color: str = "#FF3B30",
+        color_mode: str = "queue",
+        color_tolerance: float = 30.0,
     ):
         self.parent = parent
         self.index = index
@@ -55,6 +60,11 @@ class TargetPin:
         self._flashing = False
         self._scale = 1.0
         self._anim_job: Optional[str] = None
+
+        self.color_trigger = bool(color_trigger)
+        self.target_color = str(target_color)
+        self.color_mode = str(color_mode)
+        self.color_tolerance = float(color_tolerance)
 
         # Borderless topmost circular window using color-key transparency for outer corners
         self.win = tk.Toplevel(parent)
@@ -199,6 +209,16 @@ class TargetPin:
                 font=(T.FONT_FAMILY, 7, "bold"),
             )
 
+        # Tactical Color Trigger Pip (Visual indicator of color-conditioned pin)
+        if getattr(self, "color_trigger", False):
+            pip_r = max(3, round(4 * s))
+            pip_cx = cx + r_outer - 5
+            pip_cy = cy - r_outer + 5
+            self.canvas.create_oval(
+                pip_cx - pip_r, pip_cy - pip_r, pip_cx + pip_r, pip_cy + pip_r,
+                fill=self.target_color, outline="#FFFFFF", width=1.5
+            )
+
     def _show_hud(self):
         if self.hud_win is None or not self.hud_win.winfo_exists():
             self.hud_win = tk.Toplevel(self.win)
@@ -227,17 +247,18 @@ class TargetPin:
     def _update_hud_text_and_pos(self):
         if self.hud_win and self.hud_lbl and self.hud_win.winfo_exists():
             state_str = "" if self.enabled else " [DISABLED]"
+            col_tag = f"  ·  🎨 {self.target_color} ({self.color_mode.upper()} {self.color_tolerance:.0f}%)" if getattr(self, "color_trigger", False) else ""
             txt = (
                 f"#{self.index + 1} {self.label}{state_str}   ·   "
                 f"X {self.center_x}, Y {self.center_y}   ·   "
-                f"⏱ {self.delay:.2f}s  (Scroll ±0.1s · Right-click delete)"
+                f"⏱ {self.delay:.2f}s{col_tag}  (Scroll ±0.1s · Right-click delete)"
             )
             if getattr(self, "_last_hud_text", None) != txt:
                 self._last_hud_text = txt
                 outer_col, _, _ = self._get_accent_colors()
                 self.hud_win.config(bg=outer_col)
                 self.hud_lbl.config(text=txt)
-            hud_x = self.center_x - 125
+            hud_x = self.center_x - 135
             hud_y = self.top_left_y - 34
             self.hud_win.geometry(f"+{hud_x}+{hud_y}")
 
@@ -276,6 +297,10 @@ class TargetPin:
         self.delay = float(pt.get("delay", 1.0))
         self.click_type = pt.get("click_type", "left")
         self.enabled = bool(pt.get("enabled", True))
+        self.color_trigger = bool(pt.get("color_trigger", False))
+        self.target_color = pt.get("target_color", "#FF3B30")
+        self.color_mode = pt.get("color_mode", "queue")
+        self.color_tolerance = float(pt.get("color_tolerance", 30.0))
         self._draw_reticle()
         if not self._is_dragging:
             self.update_position(pt.get("x", 500), pt.get("y", 300))
@@ -452,6 +477,118 @@ class SnipeCursorOverlay:
             pass
 
 
+class ColorEyedropperOverlay:
+    """Floating HUD eyedropper overlay that follows the cursor across all monitors,
+    displays live pixel color under the cursor (Hex and RGB swatch), and samples on Left-Click."""
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        on_picked: Callable[[str, Tuple[int, int]], None],
+        on_cancelled: Optional[Callable[[], None]] = None,
+    ):
+        self.parent = parent
+        self.on_picked = on_picked
+        self.on_cancelled = on_cancelled
+        self._user32 = ctypes.windll.user32
+        self._active = True
+
+        self.win = tk.Toplevel(parent)
+        self.win.overrideredirect(True)
+        self.win.wm_attributes("-topmost", True)
+        self.win.config(bg=T.BORDER)
+
+        self.container = tk.Frame(self.win, bg=T.SURFACE, padx=10, pady=8)
+        self.container.pack(padx=1, pady=1)
+
+        # Header with live color swatch preview
+        header_row = tk.Frame(self.container, bg=T.SURFACE)
+        header_row.pack(fill="x", pady=(0, 4))
+
+        self.swatch = tk.Label(header_row, width=4, height=2, bg="#FFFFFF", relief="solid", bd=1)
+        self.swatch.pack(side="left", padx=(0, 8))
+
+        self.lbl_color = tk.Label(
+            header_row,
+            text="EYEDROPPER",
+            bg=T.SURFACE,
+            fg=T.TEXT,
+            font=(T.MONO_FAMILY, 10, "bold"),
+            justify="left",
+            anchor="w",
+        )
+        self.lbl_color.pack(side="left", fill="x", expand=True)
+
+        self.lbl_help = tk.Label(
+            self.container,
+            text="Left-Click: Pick Color   ·   Right-Click / ESC: Cancel",
+            bg=T.SURFACE,
+            fg=T.TEXT_DIM,
+            font=(T.FONT_FAMILY, 8),
+            justify="left",
+            anchor="w",
+        )
+        self.lbl_help.pack(fill="x")
+
+        # Wait until initial mouse button is released before arming trigger
+        self._armed = False
+        self._last_color = None
+        self._last_pos = None
+        self.parent.after(150, self._poll)
+
+    def _poll(self):
+        if not self._active:
+            return
+
+        x, y = get_current_mouse_pos()
+        if (x, y) != self._last_pos:
+            self._last_pos = (x, y)
+            # Offset overlay from cursor so it doesn't obstruct pixel sampling
+            self.win.geometry(f"+{x + 24}+{y + 24}")
+
+        rgb = get_pixel_color(x, y)
+        hex_code = rgb_to_hex(rgb)
+
+        if hex_code != self._last_color:
+            self._last_color = hex_code
+            try:
+                self.swatch.config(bg=hex_code)
+            except Exception:
+                pass
+            self.lbl_color.config(
+                text=f"{hex_code.upper()}  (RGB {rgb[0]}, {rgb[1]}, {rgb[2]})\nPos: X {x} · Y {y}"
+            )
+
+        l_down = bool(self._user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000)
+        r_down = bool(self._user32.GetAsyncKeyState(VK_RBUTTON) & 0x8000)
+        esc_down = bool(self._user32.GetAsyncKeyState(VK_ESCAPE) & 0x8000)
+
+        if not self._armed:
+            if not l_down:
+                self._armed = True
+        else:
+            if l_down:
+                self.stop()
+                play_sound("snipe")
+                self.on_picked(hex_code, (x, y))
+                return
+            if r_down or esc_down:
+                self.stop()
+                play_sound("cancel")
+                if self.on_cancelled:
+                    self.on_cancelled()
+                return
+
+        self.parent.after(20, self._poll)
+
+    def stop(self):
+        self._active = False
+        try:
+            self.win.destroy()
+        except Exception:
+            pass
+
+
 class TargetPinManager:
     """Manages all on-screen circular target pins and click-flash ripples for the sequence."""
 
@@ -493,6 +630,10 @@ class TargetPinManager:
                 on_wheel_delay=self.on_pin_wheel_delay,
                 on_delete=self.on_pin_delete,
                 animate_spawn=self.visible,
+                color_trigger=bool(pt.get("color_trigger", False)),
+                target_color=pt.get("target_color", "#FF3B30"),
+                color_mode=pt.get("color_mode", "queue"),
+                color_tolerance=float(pt.get("color_tolerance", 30.0)),
             )
             if not self.visible:
                 pin.hide()

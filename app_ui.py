@@ -9,7 +9,8 @@ from typing import Optional
 from engine import AutoClickerEngine
 from hotkeys import GlobalHotkeyManager, get_current_mouse_pos, get_monitor_bounds_at, play_sound, play_tone
 from profile_manager import ProfileManager
-from target_pin import TargetPinManager, SnipeCursorOverlay
+from target_pin import TargetPinManager, SnipeCursorOverlay, ColorEyedropperOverlay
+from pixel_scanner import BASE_PALETTE, get_pixel_color, rgb_to_hex, color_matches, color_distance_pct, hex_to_rgb
 from theme import T
 from toast import ToastManager
 from ui_widgets import CollapsibleSection
@@ -907,12 +908,47 @@ class UniClickApp(ctk.CTk):
             lambda val, i=index: self._update_pt_prop(i, "repeat", int(val.replace("x", ""))),
         ).pack(side="left")
 
+        # Visual indicator badge if color trigger is active
+        if pt.get("color_trigger"):
+            target_col = pt.get("target_color", "#FF3B30")
+            c_mode = pt.get("color_mode", "queue")
+            badge_f = ctk.CTkFrame(meta, fg_color=T.SURFACE, corner_radius=T.RADIUS_SM, border_width=1, border_color=T.BORDER)
+            badge_f.pack(side="left", padx=(8, 0))
+            sw = ctk.CTkFrame(badge_f, width=10, height=10, corner_radius=2, fg_color=target_col)
+            sw.pack(side="left", padx=(5, 3), pady=4)
+            sw.pack_propagate(False)
+            ctk.CTkLabel(
+                badge_f,
+                text=f"{target_col} ({c_mode.title()})",
+                font=ctk.CTkFont(family=T.MONO_FAMILY, size=10, weight="bold"),
+                text_color=T.TEXT,
+            ).pack(side="left", padx=(0, 6), pady=2)
+
         # Right: actions
         f_actions = ctk.CTkFrame(row, fg_color="transparent")
         f_actions.grid(row=0, column=2, rowspan=2, padx=(0, 8), pady=8, sticky="e")
 
         top_actions = ctk.CTkFrame(f_actions, fg_color="transparent")
         top_actions.pack()
+
+        # Color trigger modal button 🎨
+        has_color = bool(pt.get("color_trigger"))
+        c_btn_fg = T.SURFACE_HOVER if has_color else "transparent"
+        c_btn_text = pt.get("target_color", T.PRIMARY) if has_color else T.TEXT_MUTED
+        btn_palette = ctk.CTkButton(
+            top_actions,
+            text="🎨",
+            width=28,
+            height=26,
+            corner_radius=T.RADIUS_SM,
+            fg_color=c_btn_fg,
+            hover_color=T.NEUTRAL_HOVER,
+            text_color=c_btn_text,
+            font=ctk.CTkFont(family=T.FONT_FAMILY, size=13),
+            command=lambda i=index: self._open_color_trigger_dialog(i),
+        )
+        btn_palette.pack(side="left", padx=1)
+
         self._icon_button(top_actions, "🎯", lambda i=index: self._cmd_test_single_point(i),
                           hover=T.TEAL_HOVER, color=T.TEAL).pack(side="left", padx=1)
         self._icon_button(top_actions, "⧉", lambda i=index: self._cmd_duplicate_point(i)).pack(side="left", padx=1)
@@ -974,7 +1010,12 @@ class UniClickApp(ctk.CTk):
             "delay": self._get_default_delay_val(),
             "click_type": "left",
             "repeat": 1,
-            "enabled": True
+            "enabled": True,
+            "color_trigger": False,
+            "target_color": "#FF3B30",
+            "color_mode": "queue",
+            "color_tolerance": 30.0,
+            "color_timeout": 0.0,
         }
         self.engine.points.append(new_pt)
         self._render_points_list()
@@ -1108,6 +1149,411 @@ class UniClickApp(ctk.CTk):
             del self.engine.points[index]
             play_sound("delete")
             self._render_points_list()
+
+    def _open_color_trigger_dialog(self, index: int):
+        if not (0 <= index < len(self.engine.points)):
+            return
+
+        pt = self.engine.points[index]
+        step_num = index + 1
+        pt_x = int(pt.get("x", 0))
+        pt_y = int(pt.get("y", 0))
+
+        # Local working variables
+        var_enabled = ctk.BooleanVar(value=bool(pt.get("color_trigger", False)))
+        var_color = ctk.StringVar(value=pt.get("target_color", "#FF3B30").upper())
+        var_mode = ctk.StringVar(value=pt.get("color_mode", "queue"))
+        var_tolerance = ctk.DoubleVar(value=float(pt.get("color_tolerance", 30.0)))
+
+        dlg = ctk.CTkToplevel(self)
+        dlg.title(f"Color Trigger — Step #{step_num}")
+        dlg.geometry("490x610")
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.attributes("-topmost", True)
+        dlg.configure(fg_color=T.BG)
+
+        # Center relative to parent window
+        self.update_idletasks()
+        rx = self.winfo_x() + max(0, (self.winfo_width() - 490) // 2)
+        ry = self.winfo_y() + max(0, (self.winfo_height() - 610) // 2)
+        dlg.geometry(f"+{rx}+{ry}")
+        dlg.grab_set()
+
+        # Content Container
+        container = ctk.CTkFrame(dlg, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=18, pady=16)
+
+        # 1. Header
+        header = ctk.CTkFrame(container, fg_color="transparent")
+        header.pack(fill="x", pady=(0, 10))
+
+        ctk.CTkLabel(
+            header,
+            text=f"🎨 Color Trigger — Step #{step_num}",
+            font=ctk.CTkFont(family=T.FONT_FAMILY, size=16, weight="bold"),
+            text_color=T.TEXT,
+            anchor="w",
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            header,
+            text=f"Executes click only when screen color matches under ({pt_x}, {pt_y})",
+            font=ctk.CTkFont(family=T.FONT_FAMILY, size=11),
+            text_color=T.TEXT_MUTED,
+            anchor="w",
+        ).pack(anchor="w", pady=(2, 0))
+
+        # 2. Enable Toggle Switch
+        switch_frame = ctk.CTkFrame(container, fg_color=T.SURFACE, corner_radius=T.RADIUS, border_width=1, border_color=T.BORDER)
+        switch_frame.pack(fill="x", pady=(0, 10), ipady=4)
+
+        sw_row = ctk.CTkFrame(switch_frame, fg_color="transparent")
+        sw_row.pack(fill="x", padx=12, pady=6)
+
+        ctk.CTkLabel(
+            sw_row,
+            text="Enable Color Detection for this pin",
+            font=ctk.CTkFont(family=T.FONT_FAMILY, size=13, weight="bold"),
+            text_color=T.TEXT,
+        ).pack(side="left")
+
+        ctk.CTkSwitch(
+            sw_row,
+            text="",
+            variable=var_enabled,
+            width=38,
+            progress_color=T.SUCCESS,
+        ).pack(side="right")
+
+        # 3. Execution Mode Segmented Control
+        mode_card = ctk.CTkFrame(container, fg_color=T.SURFACE, corner_radius=T.RADIUS, border_width=1, border_color=T.BORDER)
+        mode_card.pack(fill="x", pady=(0, 10))
+
+        m_inner = ctk.CTkFrame(mode_card, fg_color="transparent")
+        m_inner.pack(fill="x", padx=12, pady=10)
+
+        ctk.CTkLabel(
+            m_inner,
+            text="TRIGGER MODE",
+            font=ctk.CTkFont(family=T.FONT_FAMILY, size=10, weight="bold"),
+            text_color=T.TEXT_DIM,
+            anchor="w",
+        ).pack(fill="x", pady=(0, 6))
+
+        mode_desc_lbl = ctk.CTkLabel(
+            m_inner,
+            text="",
+            font=ctk.CTkFont(family=T.FONT_FAMILY, size=11),
+            text_color=T.TEXT_MUTED,
+            justify="left",
+            wraplength=440,
+            anchor="w",
+        )
+
+        def _update_mode_desc(selected_val: str):
+            if "Queue" in selected_val:
+                var_mode.set("queue")
+                mode_desc_lbl.configure(
+                    text="⏳ Queue Mode: Waits in sequence until this color appears before clicking (infinite wait until matched or stopped)."
+                )
+            else:
+                var_mode.set("instant")
+                mode_desc_lbl.configure(
+                    text="⚡ Instant Mode: Autonomous watcher thread. Clicks immediately whenever this color appears under the pin."
+                )
+
+        initial_mode_text = "Queue (Wait in sequence)" if var_mode.get() == "queue" else "Instant (Autonomous watcher)"
+        seg_mode = ctk.CTkSegmentedButton(
+            m_inner,
+            values=["Queue (Wait in sequence)", "Instant (Autonomous watcher)"],
+            command=_update_mode_desc,
+            font=ctk.CTkFont(family=T.FONT_FAMILY, size=12, weight="bold"),
+            selected_color=T.PRIMARY,
+            selected_hover_color=T.PRIMARY_HOVER,
+            unselected_color=T.SURFACE_ALT,
+            unselected_hover_color=T.SURFACE_HOVER,
+        )
+        seg_mode.set(initial_mode_text)
+        seg_mode.pack(fill="x", pady=(0, 6))
+
+        mode_desc_lbl.pack(fill="x")
+        _update_mode_desc(initial_mode_text)
+
+        # 4. Target Color Selection
+        color_card = ctk.CTkFrame(container, fg_color=T.SURFACE, corner_radius=T.RADIUS, border_width=1, border_color=T.BORDER)
+        color_card.pack(fill="x", pady=(0, 10))
+
+        c_inner = ctk.CTkFrame(color_card, fg_color="transparent")
+        c_inner.pack(fill="x", padx=12, pady=10)
+
+        ctk.CTkLabel(
+            c_inner,
+            text="TARGET COLOR",
+            font=ctk.CTkFont(family=T.FONT_FAMILY, size=10, weight="bold"),
+            text_color=T.TEXT_DIM,
+            anchor="w",
+        ).pack(fill="x", pady=(0, 6))
+
+        pick_row = ctk.CTkFrame(c_inner, fg_color="transparent")
+        pick_row.pack(fill="x", pady=(0, 8))
+
+        swatch_frame = ctk.CTkFrame(pick_row, width=44, height=36, corner_radius=T.RADIUS_SM, fg_color=var_color.get(), border_width=1, border_color=T.BORDER)
+        swatch_frame.pack(side="left", padx=(0, 10))
+        swatch_frame.pack_propagate(False)
+
+        ent_hex = ctk.CTkEntry(
+            pick_row,
+            textvariable=var_color,
+            width=90,
+            height=34,
+            corner_radius=T.RADIUS_SM,
+            fg_color=T.SURFACE_ALT,
+            border_color=T.BORDER,
+            font=ctk.CTkFont(family=T.MONO_FAMILY, size=12, weight="bold"),
+            justify="center",
+        )
+        ent_hex.pack(side="left", padx=(0, 8))
+
+        def _sync_color(hex_val: str):
+            h = hex_val.strip()
+            if not h.startswith("#"):
+                h = "#" + h
+            if len(h) == 7:
+                try:
+                    swatch_frame.configure(fg_color=h)
+                except Exception:
+                    pass
+
+        ent_hex.bind("<KeyRelease>", lambda e: _sync_color(var_color.get()))
+
+        def _sample_pin_color():
+            rgb = get_pixel_color(pt_x, pt_y)
+            hex_val = rgb_to_hex(rgb)
+            var_color.set(hex_val.upper())
+            _sync_color(hex_val)
+            play_sound("snipe")
+
+        btn_sample_pin = ctk.CTkButton(
+            pick_row,
+            text="🎯 Under Pin",
+            width=90,
+            height=34,
+            corner_radius=T.RADIUS_SM,
+            fg_color=T.SURFACE_ALT,
+            hover_color=T.SURFACE_HOVER,
+            border_width=1,
+            border_color=T.BORDER,
+            font=ctk.CTkFont(family=T.FONT_FAMILY, size=11),
+            command=_sample_pin_color,
+        )
+        btn_sample_pin.pack(side="left", padx=(0, 6))
+
+        def _start_eyedropper():
+            dlg.withdraw()
+            def _on_picked(picked_hex: str, coords: tuple):
+                var_color.set(picked_hex.upper())
+                _sync_color(picked_hex)
+                dlg.deiconify()
+                dlg.attributes("-topmost", True)
+                dlg.focus_force()
+
+            def _on_cancel():
+                dlg.deiconify()
+                dlg.attributes("-topmost", True)
+                dlg.focus_force()
+
+            ColorEyedropperOverlay(self, on_picked=_on_picked, on_cancelled=_on_cancel)
+
+        btn_eyedropper = ctk.CTkButton(
+            pick_row,
+            text="🔍 Pipet",
+            width=80,
+            height=34,
+            corner_radius=T.RADIUS_SM,
+            fg_color=T.TEAL,
+            hover_color=T.TEAL_HOVER,
+            text_color=T.TEXT_ON_TEAL,
+            font=ctk.CTkFont(family=T.FONT_FAMILY, size=11, weight="bold"),
+            command=_start_eyedropper,
+        )
+        btn_eyedropper.pack(side="left")
+
+        # Base Palette Row
+        pal_row = ctk.CTkFrame(c_inner, fg_color="transparent")
+        pal_row.pack(fill="x", pady=(2, 4))
+
+        for name, col_hex in BASE_PALETTE.items():
+            btn_pal = ctk.CTkButton(
+                pal_row,
+                text="",
+                width=24,
+                height=24,
+                corner_radius=12,
+                fg_color=col_hex,
+                hover_color=col_hex,
+                border_width=1,
+                border_color=T.BORDER,
+                command=lambda h=col_hex: (var_color.set(h), _sync_color(h)),
+            )
+            btn_pal.pack(side="left", padx=4)
+
+        # 5. Tolerance Slider
+        tol_card = ctk.CTkFrame(container, fg_color=T.SURFACE, corner_radius=T.RADIUS, border_width=1, border_color=T.BORDER)
+        tol_card.pack(fill="x", pady=(0, 10))
+
+        t_inner = ctk.CTkFrame(tol_card, fg_color="transparent")
+        t_inner.pack(fill="x", padx=12, pady=10)
+
+        tol_header = ctk.CTkFrame(t_inner, fg_color="transparent")
+        tol_header.pack(fill="x", pady=(0, 4))
+
+        ctk.CTkLabel(
+            tol_header,
+            text="COLOR TOLERANCE",
+            font=ctk.CTkFont(family=T.FONT_FAMILY, size=10, weight="bold"),
+            text_color=T.TEXT_DIM,
+            anchor="w",
+        ).pack(side="left")
+
+        lbl_tol_val = ctk.CTkLabel(
+            tol_header,
+            text=f"{int(var_tolerance.get())}%",
+            font=ctk.CTkFont(family=T.MONO_FAMILY, size=12, weight="bold"),
+            text_color=T.PRIMARY,
+        )
+        lbl_tol_val.pack(side="right")
+
+        def _on_slider_change(val: float):
+            var_tolerance.set(round(val))
+            lbl_tol_val.configure(text=f"{int(round(val))}%")
+
+        slider_tol = ctk.CTkSlider(
+            t_inner,
+            from_=0,
+            to=50,
+            number_of_steps=50,
+            variable=var_tolerance,
+            command=_on_slider_change,
+            progress_color=T.PRIMARY,
+            button_color=T.PRIMARY,
+            button_hover_color=T.PRIMARY_HOVER,
+        )
+        slider_tol.pack(fill="x", pady=(2, 4))
+
+        ctk.CTkLabel(
+            t_inner,
+            text="0% = exact pixel match  ·  Default: 30% (handles anti-aliasing / slight shading)",
+            font=ctk.CTkFont(family=T.FONT_FAMILY, size=10),
+            text_color=T.TEXT_MUTED,
+            anchor="w",
+        ).pack(fill="x")
+
+        # 6. Live Screen Status under Pin
+        live_card = ctk.CTkFrame(container, fg_color=T.SURFACE_ALT, corner_radius=T.RADIUS_SM, border_width=1, border_color=T.BORDER)
+        live_card.pack(fill="x", pady=(0, 12))
+
+        l_inner = ctk.CTkFrame(live_card, fg_color="transparent")
+        l_inner.pack(fill="x", padx=10, pady=6)
+
+        live_swatch = ctk.CTkFrame(l_inner, width=18, height=18, corner_radius=3, fg_color="#000000", border_width=1, border_color=T.BORDER)
+        live_swatch.pack(side="left", padx=(0, 8))
+        live_swatch.pack_propagate(False)
+
+        lbl_live_status = ctk.CTkLabel(
+            l_inner,
+            text="Sampling pin pixel...",
+            font=ctk.CTkFont(family=T.MONO_FAMILY, size=11),
+            text_color=T.TEXT_MUTED,
+            anchor="w",
+        )
+        lbl_live_status.pack(side="left", fill="x", expand=True)
+
+        _dialog_active = [True]
+        def _poll_live_color():
+            if not _dialog_active[0] or not dlg.winfo_exists():
+                return
+            try:
+                cur_rgb = get_pixel_color(pt_x, pt_y)
+                cur_hex = rgb_to_hex(cur_rgb)
+                live_swatch.configure(fg_color=cur_hex)
+
+                target_hex = var_color.get().strip()
+                matches = color_matches(cur_rgb, target_hex, var_tolerance.get())
+                diff = color_distance_pct(cur_rgb, hex_to_rgb(target_hex))
+
+                if matches:
+                    lbl_live_status.configure(
+                        text=f"Under pin: {cur_hex}  —  MATCH (ΔE {diff:.1f}%)",
+                        text_color=T.SUCCESS,
+                    )
+                else:
+                    lbl_live_status.configure(
+                        text=f"Under pin: {cur_hex}  —  No match (ΔE {diff:.1f}%)",
+                        text_color=T.TEXT_MUTED,
+                    )
+            except Exception:
+                pass
+
+            dlg.after(250, _poll_live_color)
+
+        dlg.after(100, _poll_live_color)
+
+        def _cleanup():
+            _dialog_active[0] = False
+            try:
+                dlg.destroy()
+            except Exception:
+                pass
+
+        dlg.protocol("WM_DELETE_WINDOW", _cleanup)
+
+        # 7. Action Buttons (Apply & Cancel)
+        btn_row = ctk.CTkFrame(container, fg_color="transparent")
+        btn_row.pack(fill="x", side="bottom")
+
+        def _cmd_apply():
+            pt["color_trigger"] = bool(var_enabled.get())
+            pt["target_color"] = var_color.get().strip()
+            pt["color_mode"] = var_mode.get()
+            pt["color_tolerance"] = round(var_tolerance.get(), 1)
+            pt["color_timeout"] = 0.0
+
+            self.pin_mgr.sync_points(self.engine.points)
+            self._render_points_list()
+            self.toast.show(f"Color trigger Step #{step_num} updated", "success", 1500)
+            self._append_log(
+                f"Configured Step #{step_num} color trigger: {pt['target_color']} ({pt['color_mode']}, tol {pt['color_tolerance']}%)"
+            )
+            _cleanup()
+
+        btn_cancel = ctk.CTkButton(
+            btn_row,
+            text="Cancel",
+            width=90,
+            height=34,
+            corner_radius=T.RADIUS_SM,
+            fg_color=T.SURFACE_ALT,
+            hover_color=T.SURFACE_HOVER,
+            border_width=1,
+            border_color=T.BORDER,
+            font=ctk.CTkFont(family=T.FONT_FAMILY, size=12),
+            command=_cleanup,
+        )
+        btn_cancel.pack(side="left")
+
+        btn_save = ctk.CTkButton(
+            btn_row,
+            text="Apply & Save",
+            height=34,
+            corner_radius=T.RADIUS_SM,
+            fg_color=T.PRIMARY,
+            hover_color=T.PRIMARY_HOVER,
+            text_color=T.TEXT_ON_PRIMARY,
+            font=ctk.CTkFont(family=T.FONT_FAMILY, size=12, weight="bold"),
+            command=_cmd_apply,
+        )
+        btn_save.pack(side="right", fill="x", expand=True, padx=(8, 0))
 
     def _cmd_clear_points(self):
         if messagebox.askyesno("Confirm Clear", "Are you sure you want to clear all targets in sequence?"):

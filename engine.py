@@ -6,6 +6,7 @@ from ctypes import wintypes
 from typing import List, Dict, Any, Callable, Optional
 from hotkeys import get_current_mouse_pos
 from win_timer import enable_high_precision_timer, disable_high_precision_timer
+from pixel_scanner import get_pixel_color, color_matches, hex_to_rgb, rgb_to_hex
 
 # Windows input constants and structures
 ULONG_PTR = ctypes.c_size_t
@@ -58,6 +59,7 @@ class AutoClickerEngine:
 
         # State management
         self._thread: Optional[threading.Thread] = None
+        self._sentinel_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
         self._pause_event.set()
@@ -239,6 +241,94 @@ class AutoClickerEngine:
 
         return True
 
+    def _wait_for_color(
+        self,
+        x: int,
+        y: int,
+        target_color: str,
+        tolerance: float,
+        timeout: float,
+        start_mono: float,
+        label: str,
+    ) -> bool:
+        """Polls pixel at (x, y) until it matches target_color within tolerance.
+        Returns True when matched, or False if stopped or timed out."""
+        wait_start = time.perf_counter()
+        target_rgb = hex_to_rgb(target_color)
+        self._log(f"Waiting for color {target_color} (tol {tolerance:.0f}%) on '{label}' at ({x}, {y})...")
+
+        while not self._stop_event.is_set():
+            if not self._pause_event.is_set():
+                p_start = time.perf_counter()
+                while not self._pause_event.is_set():
+                    if self._stop_event.is_set():
+                        return False
+                    time.sleep(0.015)
+                p_spent = time.perf_counter() - p_start
+                self._paused_duration += p_spent
+                wait_start += p_spent
+
+            if timeout > 0:
+                if (time.perf_counter() - wait_start) >= timeout:
+                    self._log(f"Color wait timeout ({timeout:.1f}s) reached on '{label}'. Skipping step.")
+                    return False
+
+            cur_rgb = get_pixel_color(x, y)
+            if color_matches(cur_rgb, target_rgb, tolerance):
+                cur_hex = rgb_to_hex(*cur_rgb)
+                self._log(f"Color trigger matched: {cur_hex} at ({x}, {y}) on '{label}'")
+                return True
+
+            now_mono = time.perf_counter()
+            self.elapsed_time = max(0.0, (now_mono - start_mono) - self._paused_duration)
+            if self.use_duration and self.elapsed_time >= self.duration_seconds:
+                return False
+
+            if self._stop_event.wait(0.015):
+                return False
+
+        return False
+
+    def _sentinel_worker(self):
+        """Concurrently watches targets configured for instant autonomous color triggering."""
+        last_fired = {}  # target_idx -> timestamp
+        COOLDOWN = 0.4   # seconds debounce cooldown per target
+
+        while not self._stop_event.is_set():
+            if not self._pause_event.is_set():
+                time.sleep(0.02)
+                continue
+
+            now = time.perf_counter()
+            pts = list(self.points)
+            for idx, pt in enumerate(pts):
+                if self._stop_event.is_set():
+                    break
+                if not pt.get("enabled", True):
+                    continue
+                if pt.get("color_trigger") and pt.get("color_mode") == "instant":
+                    pt_key = id(pt)
+                    if now - last_fired.get(pt_key, 0.0) < COOLDOWN:
+                        continue
+
+                    x = int(pt.get("x", 0))
+                    y = int(pt.get("y", 0))
+                    target_col = pt.get("target_color", "#FF3B30")
+                    tol = float(pt.get("color_tolerance", 30.0))
+
+                    cur_rgb = get_pixel_color(x, y)
+                    if color_matches(cur_rgb, target_col, tol):
+                        last_fired[pt_key] = now
+                        self.perform_click(
+                            x, y, pt.get("click_type", "left"),
+                            apply_jitter=bool(self.pixel_jitter > 0),
+                            restore_pos=self.restore_cursor
+                        )
+                        lbl = pt.get("label", f"Target #{idx+1}")
+                        self._log(f"⚡ Instant Color Trigger fired at ({x}, {y}) on '{lbl}' ({target_col})")
+
+            time.sleep(0.015)
+
     def _worker(self):
         """Worker loop that traverses points sequentially in queue (1 > 2 > 3 ...)."""
         self._set_status("RUNNING")
@@ -265,9 +355,17 @@ class AutoClickerEngine:
                     except Exception:
                         pass
 
-                # Snapshot points list to prevent race conditions during point addition/removal
-                pts_snapshot = list(self.points)
+                # Filter points: sequential queue only runs points that are enabled and not instant sentinels
+                pts_snapshot = [
+                    p for p in list(self.points)
+                    if not (p.get("color_trigger") and p.get("color_mode") == "instant")
+                ]
                 total_steps = len(pts_snapshot)
+                if total_steps == 0:
+                    # All active targets are handled by instant sentinel thread; idle sleep responsively
+                    if not self._responsive_sleep(0.05, start_mono):
+                        break
+                    continue
 
                 for idx, pt in enumerate(pts_snapshot):
                     if self._stop_event.is_set():
@@ -308,6 +406,29 @@ class AutoClickerEngine:
                     y = pt.get("y", 0)
                     click_type = pt.get("click_type", "left")
                     repeat_count = max(1, int(pt.get("repeat", 1)))
+
+                    # If this target is an autonomous instant sentinel, skip it in sequential queue
+                    if pt.get("color_trigger") and pt.get("color_mode") == "instant":
+                        continue
+
+                    # If this target is color-triggered in queue mode, wait for color before clicking
+                    if pt.get("color_trigger") and pt.get("color_mode", "queue") == "queue":
+                        target_col = pt.get("target_color", "#FF3B30")
+                        tol = float(pt.get("color_tolerance", 30.0))
+                        timeout = float(pt.get("color_timeout", 0.0))
+                        matched = self._wait_for_color(
+                            x=int(x),
+                            y=int(y),
+                            target_color=target_col,
+                            tolerance=tol,
+                            timeout=timeout,
+                            start_mono=start_mono,
+                            label=label,
+                        )
+                        if not matched:
+                            if self._stop_event.is_set():
+                                break
+                            continue
 
                     last_cx, last_cy = x, y
                     for r_idx in range(repeat_count):
@@ -383,6 +504,16 @@ class AutoClickerEngine:
         enable_high_precision_timer()
         self._stop_event.clear()
         self._pause_event.set()
+
+        # If any active target is set to instant sentinel mode, launch autonomous sentinel thread
+        has_instant = any(
+            pt.get("enabled", True) and pt.get("color_trigger") and pt.get("color_mode") == "instant"
+            for pt in self.points
+        )
+        if has_instant:
+            self._sentinel_thread = threading.Thread(target=self._sentinel_worker, daemon=True)
+            self._sentinel_thread.start()
+
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
         return True
@@ -413,6 +544,8 @@ class AutoClickerEngine:
             self._pause_event.set()
             if self._thread and self._thread.is_alive():
                 self._thread.join(timeout=0.15)
+            if self._sentinel_thread and self._sentinel_thread.is_alive():
+                self._sentinel_thread.join(timeout=0.15)
             self._set_status("STOPPED")
             self._log("Auto Clicker STOPPED.")
             disable_high_precision_timer()
