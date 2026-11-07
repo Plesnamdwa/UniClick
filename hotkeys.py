@@ -20,21 +20,39 @@ class MONITORINFO(ctypes.Structure):
         ("dwFlags", wintypes.DWORD),
     ]
 
+_user32 = ctypes.windll.user32
+try:
+    _user32.GetCursorPos.argtypes = [ctypes.POINTER(POINT)]
+    _user32.GetCursorPos.restype = wintypes.BOOL
+except Exception:
+    pass
+
+try:
+    _user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+    _user32.MonitorFromPoint.restype = wintypes.HMONITOR
+except Exception:
+    pass
+
+try:
+    _user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFO)]
+    _user32.GetMonitorInfoW.restype = wintypes.BOOL
+except Exception:
+    pass
+
 def get_current_mouse_pos() -> tuple[int, int]:
     """Gets current physical screen cursor coordinates (X, Y) across all monitors."""
     pt = POINT()
-    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+    _user32.GetCursorPos(ctypes.byref(pt))
     return int(pt.x), int(pt.y)
 
 def get_monitor_bounds_at(x: int, y: int) -> tuple[int, int, int, int]:
     """Returns (left, top, right, bottom) of the monitor nearest to (x, y)."""
     try:
-        user32 = ctypes.windll.user32
         pt = wintypes.POINT(int(x), int(y))
-        hmon = user32.MonitorFromPoint(pt, 2)  # MONITOR_DEFAULTTONEAREST = 2
+        hmon = _user32.MonitorFromPoint(pt, 2)  # MONITOR_DEFAULTTONEAREST = 2
         mi = MONITORINFO()
         mi.cbSize = ctypes.sizeof(MONITORINFO)
-        if user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+        if _user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
             r = mi.rcWork
             return int(r.left), int(r.top), int(r.right), int(r.bottom)
     except Exception:

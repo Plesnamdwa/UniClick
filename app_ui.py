@@ -1297,12 +1297,21 @@ class UniClickApp(ctk.CTk):
             "points": self.engine.points
         }
 
-        self.profile_mgr.save_profile(name, profile_data)
-        self.combo_profiles.configure(values=self._get_profile_list())
-        self.combo_profiles.set(name)
-        self.current_profile_name = name
-        self.toast.show(f"Preset '{name}' saved", "success")
-        self._append_log(f"Profile '{name}' saved.")
+        def _async_save():
+            try:
+                self.profile_mgr.save_profile(name, profile_data)
+                def _on_saved():
+                    self.combo_profiles.configure(values=self._get_profile_list())
+                    self.combo_profiles.set(name)
+                    self.current_profile_name = name
+                    self.toast.show(f"Preset '{name}' saved", "success")
+                    self._append_log(f"Profile '{name}' saved.")
+                    self._refresh_section_summaries()
+                self.after(0, _on_saved)
+            except Exception as e:
+                self.after(0, lambda err=e: messagebox.showerror("Error", f"Failed to save profile: {err}"))
+
+        threading.Thread(target=_async_save, daemon=True).start()
 
     def _cmd_load_selected_profile(self):
         name = self.combo_profiles.get()

@@ -54,12 +54,14 @@ class AutoClickerEngine:
         self.duration_seconds: float = 60.0   # auto-stop active timer seconds
         self.use_max_cycles: bool = False
         self.max_cycles: int = 10
+        self.double_click_interval: float = 0.012  # seconds between clicks in a double-click
 
         # State management
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
         self._pause_event.set()
+        self._click_lock = threading.Lock()
 
         self.status = "IDLE"  # IDLE, RUNNING, PAUSED, COMPLETED, STOPPED
         self.current_cycle: int = 0
@@ -162,18 +164,21 @@ class AutoClickerEngine:
 
         if click_type == "double":
             self._emit_click_batch([MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP])
-            time.sleep(0.012)
+            time.sleep(self.double_click_interval)
             self._emit_click_batch([MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP])
-            self.total_clicks += 2
+            clicks_to_add = 2
         elif click_type == "right":
             self._emit_click_batch([MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP])
-            self.total_clicks += 1
+            clicks_to_add = 1
         elif click_type == "middle":
             self._emit_click_batch([MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP])
-            self.total_clicks += 1
+            clicks_to_add = 1
         else:  # Default left click
             self._emit_click_batch([MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP])
-            self.total_clicks += 1
+            clicks_to_add = 1
+
+        with self._click_lock:
+            self.total_clicks += clicks_to_add
 
         if restore_pos:
             self._user32.SetCursorPos(orig_x, orig_y)
