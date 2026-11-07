@@ -232,9 +232,11 @@ class TargetPin:
                 f"X {self.center_x}, Y {self.center_y}   ·   "
                 f"⏱ {self.delay:.2f}s  (Scroll ±0.1s · Right-click delete)"
             )
-            outer_col, _, _ = self._get_accent_colors()
-            self.hud_win.config(bg=outer_col)
-            self.hud_lbl.config(text=txt)
+            if getattr(self, "_last_hud_text", None) != txt:
+                self._last_hud_text = txt
+                outer_col, _, _ = self._get_accent_colors()
+                self.hud_win.config(bg=outer_col)
+                self.hud_lbl.config(text=txt)
             hud_x = self.center_x - 125
             hud_y = self.top_left_y - 34
             self.hud_win.geometry(f"+{hud_x}+{hud_y}")
@@ -324,7 +326,8 @@ class TargetPin:
 
     def _on_drag_start(self, event):
         self._is_dragging = True
-        self._start_mouse_x, self._start_mouse_y = get_current_mouse_pos()
+        self._start_mouse_x = event.x_root
+        self._start_mouse_y = event.y_root
         self._start_pin_x = self.top_left_x
         self._start_pin_y = self.top_left_y
         self._draw_reticle()
@@ -333,9 +336,8 @@ class TargetPin:
     def _on_drag_motion(self, event):
         if not self._is_dragging:
             return
-        cur_x, cur_y = get_current_mouse_pos()
-        dx = cur_x - self._start_mouse_x
-        dy = cur_y - self._start_mouse_y
+        dx = event.x_root - self._start_mouse_x
+        dy = event.y_root - self._start_mouse_y
 
         self.top_left_x = self._start_pin_x + dx
         self.top_left_y = self._start_pin_y + dy

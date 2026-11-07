@@ -12,6 +12,7 @@ from target_pin import TargetPinManager, SnipeCursorOverlay
 from theme import T
 from toast import ToastManager
 from ui_widgets import CollapsibleSection
+from win_timer import disable_high_precision_timer
 
 # Modern visual theme
 ctk.set_appearance_mode("Dark")
@@ -1030,19 +1031,20 @@ class UniClickApp(ctk.CTk):
             if index < len(self.pin_mgr.pins):
                 self.pin_mgr.pins[index].hide()
             self.update_idletasks()
-            self.engine.perform_click(
-                pt["x"], pt["y"], pt.get("click_type", "left"),
-                apply_jitter=False, restore_pos=True
-            )
-            if self.pin_mgr.visible and index < len(self.pin_mgr.pins):
-                def _restore_and_flash(i=index, x=pt["x"], y=pt["y"]):
-                    if i < len(self.pin_mgr.pins):
-                        self.pin_mgr.pins[i].show()
-                    self.pin_mgr.flash_click(x, y, i)
-                self.after(80, _restore_and_flash)
-            else:
-                self.pin_mgr.flash_click(pt["x"], pt["y"], index)
-            self._append_log(f"Test clicked target #{index+1} at ({pt['x']}, {pt['y']})")
+
+            def _async_test_click():
+                self.engine.perform_click(
+                    pt["x"], pt["y"], pt.get("click_type", "left"),
+                    apply_jitter=False, restore_pos=True
+                )
+                def _finish_ui():
+                    if self.pin_mgr.visible and index < len(self.pin_mgr.pins):
+                        self.pin_mgr.pins[index].show()
+                    self.pin_mgr.flash_click(pt["x"], pt["y"], index)
+                    self._append_log(f"Test clicked target #{index+1} at ({pt['x']}, {pt['y']})")
+                self.after(20, _finish_ui)
+
+            threading.Thread(target=_async_test_click, daemon=True).start()
 
     def _cmd_duplicate_point(self, index: int):
         if 0 <= index < len(self.engine.points):
@@ -1134,14 +1136,18 @@ class UniClickApp(ctk.CTk):
     def _update_cursor_tracker(self):
         try:
             x, y = get_current_mouse_pos()
-            self.lbl_live_cursor.configure(text=f"📍 X: {x}, Y: {y}")
+            if getattr(self, "_last_cursor_pos", None) != (x, y):
+                self._last_cursor_pos = (x, y)
+                self.lbl_live_cursor.configure(text=f"📍 X: {x}, Y: {y}")
         except Exception:
             pass
-        try:
-            self._refresh_section_summaries()
-        except Exception:
-            pass
-        self.after(60, self._update_cursor_tracker)
+        self._summary_tick_count = getattr(self, "_summary_tick_count", 0) + 1
+        if self._summary_tick_count % 3 == 0:
+            try:
+                self._refresh_section_summaries()
+            except Exception:
+                pass
+        self.after(100, self._update_cursor_tracker)
 
     # -----------------------------
     # Settings & Profiles
@@ -1347,7 +1353,7 @@ class UniClickApp(ctk.CTk):
 
         try:
             processed = 0
-            while not self._event_queue.empty() and processed < 40:
+            while not self._event_queue.empty() and processed < 100:
                 event_type, payload = self._event_queue.get_nowait()
                 processed += 1
                 if event_type == "status":
@@ -1395,17 +1401,22 @@ class UniClickApp(ctk.CTk):
             self.progress_bar.set(min(1.0, max(0.0, prog)))
 
     def _highlight_active_row(self, active_zero_idx: Optional[int]):
-        if getattr(self, "_current_highlight_idx", -999) == active_zero_idx:
+        prev_idx = getattr(self, "_current_highlight_idx", None)
+        if prev_idx == active_zero_idx:
             return  # No-op: row is already highlighted, avoid redrawing to prevent UI jitter/flicker!
         self._current_highlight_idx = active_zero_idx
 
-        for idx, row in enumerate(self.point_widgets):
-            if not row.winfo_exists():
-                continue
-            if active_zero_idx is not None and idx == active_zero_idx:
-                row.configure(border_width=2, border_color=T.SUCCESS)
-            else:
+        # Reset previously highlighted row only (O(1) instead of iterating all rows)
+        if prev_idx is not None and 0 <= prev_idx < len(self.point_widgets):
+            row = self.point_widgets[prev_idx]
+            if row.winfo_exists():
                 row.configure(border_width=1, border_color=T.BORDER)
+
+        # Highlight newly active row only
+        if active_zero_idx is not None and 0 <= active_zero_idx < len(self.point_widgets):
+            row = self.point_widgets[active_zero_idx]
+            if row.winfo_exists():
+                row.configure(border_width=2, border_color=T.SUCCESS)
 
     def _update_status_ui(self, status: str):
         bg, fg, label = T.STATUS.get(status, T.STATUS["IDLE"])
@@ -1514,7 +1525,12 @@ class UniClickApp(ctk.CTk):
                 self.txt_log.delete("1.0", "60.0")
         except Exception:
             pass
-        self.txt_log.see("end")
+
+        # Throttle see("end") to at most once per 100ms to avoid constant layout reflow during click bursts
+        now = time.perf_counter()
+        if now - getattr(self, "_last_log_see_time", 0.0) >= 0.10:
+            self._last_log_see_time = now
+            self.txt_log.see("end")
 
     def _on_close(self):
         self._closing = True
@@ -1524,6 +1540,7 @@ class UniClickApp(ctk.CTk):
             self.engine.stop()
             self.hotkeys.stop()
             self.pin_mgr.clear()
+            disable_high_precision_timer()
         except Exception:
             pass
         self.destroy()

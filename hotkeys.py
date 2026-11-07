@@ -109,6 +109,11 @@ class GlobalHotkeyManager:
         self.on_emergency_stop = on_emergency_stop
 
         self._user32 = ctypes.windll.user32
+        try:
+            self._user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+            self._user32.GetAsyncKeyState.restype = ctypes.c_short
+        except Exception:
+            pass
         self._running = False
         self._poll_thread: Optional[threading.Thread] = None
 
@@ -122,11 +127,13 @@ class GlobalHotkeyManager:
         self._poll_thread.start()
 
     def _poll_loop(self):
-        """Polls key state every ~18ms with rising-edge trigger."""
+        """Polls key state every ~15ms with drift compensation and rising-edge trigger."""
         prev_f6 = False
         prev_f7 = False
         prev_f8 = False
         prev_esc = False
+
+        next_t = time.perf_counter() + 0.015
 
         while self._running:
             try:
@@ -156,7 +163,10 @@ class GlobalHotkeyManager:
             except Exception:
                 pass
 
-            time.sleep(0.018)
+            wait_time = next_t - time.perf_counter()
+            if wait_time > 0:
+                time.sleep(wait_time)
+            next_t = max(next_t + 0.015, time.perf_counter())
 
     def stop(self):
         """Stops the hotkey thread."""

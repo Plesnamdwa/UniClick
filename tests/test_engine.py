@@ -85,5 +85,29 @@ class TestAutoClicker(unittest.TestCase):
         self.assertFalse(engine.is_running())
         self.assertEqual(engine.status, "STOPPED")
 
+    def test_engine_pause_compensation(self):
+        engine = AutoClickerEngine()
+        engine.perform_click = lambda x, y, c_type, apply_jitter=False, restore_pos=False: None
+        engine.points = [
+            {"label": "P1", "x": 100, "y": 100, "delay": 0.05, "click_type": "left", "repeat": 1, "enabled": True}
+        ]
+        engine.default_delay = 0.05
+        engine.use_duration = True
+        engine.duration_seconds = 0.4
+
+        engine.start()
+        time.sleep(0.1)
+        engine.pause()
+        self.assertEqual(engine.status, "PAUSED")
+        # Pause for 0.3s (if pause wasn't compensated, duration 0.4s would expire right now)
+        time.sleep(0.3)
+        self.assertTrue(engine.is_running())
+        engine.resume()
+        self.assertEqual(engine.status, "RUNNING")
+        # Active elapsed should be ~0.1s, not 0.4s!
+        self.assertLess(engine.elapsed_time, 0.25)
+        engine.stop()
+        self.assertFalse(engine.is_running())
+
 if __name__ == "__main__":
     unittest.main()
