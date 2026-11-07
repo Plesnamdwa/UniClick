@@ -58,14 +58,16 @@ class TestColorTrigger(unittest.TestCase):
         engine.use_max_cycles = True
         engine.max_cycles = 1
 
-        # Simulate pixel color: initially Black (no match), then changes to Red (match)
+        # Simulate pixel color: initially Black (no match), then changes to Red (match), then back to Black
         mock_colors = [(0, 0, 0), (0, 0, 0), (255, 0, 0)]
         call_count = [0]
 
         def mock_get_pixel(x, y):
-            idx = min(call_count[0], len(mock_colors) - 1)
+            idx = call_count[0]
             call_count[0] += 1
-            return mock_colors[idx]
+            if idx < len(mock_colors):
+                return mock_colors[idx]
+            return (0, 0, 0)
 
         with patch("engine.get_pixel_color", side_effect=mock_get_pixel):
             engine.start()

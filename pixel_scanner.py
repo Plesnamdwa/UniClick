@@ -1,7 +1,10 @@
 import ctypes
 from ctypes import wintypes
 import math
+import logging
 from typing import Tuple
+
+logger = logging.getLogger(__name__)
 
 # Win32 GDI & User32 bindings for sub-microsecond pixel sampling
 _user32 = ctypes.windll.user32
@@ -15,8 +18,8 @@ try:
 
     _gdi32.GetPixel.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
     _gdi32.GetPixel.restype = wintypes.COLORREF
-except Exception:
-    pass
+except AttributeError as e:
+    logger.error("pixel_scanner: Win32 GDI binding setup error: %s", e)
 
 # Base preset palette
 BASE_PALETTE = {
@@ -56,18 +59,27 @@ def rgb_to_hex(r, g=None, b=None) -> str:
 
 def get_pixel_color(x: int, y: int) -> Tuple[int, int, int]:
     """Retrieves physical screen RGB color at (x, y) across any display with ~1.5us latency."""
-    hdc = _user32.GetDC(0)
-    if not hdc:
-        return (0, 0, 0)
+    hdc = 0
     try:
+        hdc = _user32.GetDC(0)
+        if not hdc:
+            logger.warning("pixel_scanner: GetDC(0) returned NULL.")
+            return (0, 0, 0)
         color = _gdi32.GetPixel(hdc, int(x), int(y))
+        # CLR_INVALID is 0xFFFFFFFF (-1)
+        if color == 0xFFFFFFFF:
+            return (0, 0, 0)
         # COLORREF in Windows is 0x00BBGGRR
         r = color & 0xFF
         g = (color >> 8) & 0xFF
         b = (color >> 16) & 0xFF
         return (r, g, b)
+    except Exception as e:
+        logger.debug("pixel_scanner: get_pixel_color error at (%s, %s): %s", x, y, e)
+        return (0, 0, 0)
     finally:
-        _user32.ReleaseDC(0, hdc)
+        if hdc:
+            _user32.ReleaseDC(0, hdc)
 
 def color_distance_pct(c1: Tuple[int, int, int], c2: Tuple[int, int, int]) -> float:
     """Calculates 3D Euclidean RGB color distance normalized to 0.0% - 100.0%.
